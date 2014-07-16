@@ -89,7 +89,7 @@ INITIAL_CONFIG = {
         "database_url": ""},
     "logging": {
         "config": "/etc/radicale/logging",
-        "debug": "True",
+        "debug": "False",
         "full_environment": "False"}}
 
 # Create a ConfigParser and configure it

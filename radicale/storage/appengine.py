@@ -36,38 +36,14 @@ from google.appengine.ext import ndb  # @UnresolvedImport
 # project
 from .. import ical # @UnresolvedImport
 
+#########################
+
 tag_class = {'VEVENT':ical.Event,
              'VCARD':ical.Card,
              'VTODO':ical.Todo,
              'VJOURNAL':ical.Journal,
              'VTIMEZONE':ical.Timezone}
-
-def tag_text_iterator( text_raw ):
-    '''
-    extract the tag and the text of the object
-    
-    (EVENT objects are enclosed in a VCALENDAR block, this will keep only the VEVENT)
-    '''
-    
-    #FIXME: do we need to decode text_raw?
-    
-    lines = ical.unfold( text_raw )
-    text = []
-    tag = None
-    for line in lines:
-        if line.startswith("BEGIN:") and not tag:
-            tag = line.replace("BEGIN:", "").strip()
-            if not tag in tag_class: tag = None
-        if tag:
-            text.append( line )
-            if line.startswith("END:") and line.replace("END:", "").strip()==tag:
-                yield tag, '\n'.join(text)
-                
-                # start afresh
-                text = []
-                tag = None
-                
-
+            
 class ItemContainerAppengine(ndb.Model):
     '''
     Container for Item
@@ -85,34 +61,62 @@ class ItemContainerAppengine(ndb.Model):
     1. this will ensure no name collision (eg: two items with same name but in different collections)
     2. when a transaction is involved, all entities (eg the item and its collection) must be in the same entity group 
     '''
+
+    @staticmethod
+    def parse_objects( text_raw ):
+        '''
+        iterator over all objects in text_raw
+        (there can be more than 1, for example, EVENT objects are enclosed in a VCALENDAR block, this will keep only the VEVENT)
+
+        return a dict with:
+        - tag
+        - text
+        - in subclasses: possibly more application specific keys we got from text
+        '''
+                
+        #FIXME: do we need to decode text_raw?
+        
+        lines = ical.unfold( text_raw )
+        text = []
+        tag = None
+        for line in lines:
+            if line.startswith("BEGIN:") and not tag:
+                tag = line.replace("BEGIN:", "").strip()
+                if not tag in tag_class: tag = None
+            if tag:
+                text.append( line )
+                    
+                if line.startswith("END:") and line.replace("END:", "").strip()==tag:
+                    yield {'tag':tag, 
+                           'text':'\n'.join(text)}
+                    
+                    # start afresh
+                    text = []
+                    tag = None
+
   
     def get_item(self):
         #FIXME: is it ok to always encode in utf-8 ?
         item_name = self.key.string_id()
-        ItemSubClass = tag_class[ self.item_tag ] #FIXME: should we default to ical.Item?
-        return ItemSubClass(self.item_text.decode('utf-8'), item_name)
+        ItemSubClass = tag_class[ self.object['tag'] ] #FIXME: should we default to ical.Item?
+        return ItemSubClass(self.object['text'].decode('utf-8'), item_name)
     
-    def set_item(self, item, tag):
+    def set(self, object):
         '''
         important: self.put() must be called explicitly after this 
         '''
-        item_name = self.key.string_id()
-        if not (item_name == item._name):
-            raise Exception('The entity key=%s is not the name=%s'%(str(item_name), str(item.name)))
-        if not (tag in tag_class):
-            raise Exception('Unknown tag:'+str(tag))
-        
-        self.item_text = item.text.encode('utf-8')
-        self.item_tag = tag
+        self.object = object
 
-    # the actual item (private, use accessors above) 
-    item_text = ndb.BlobProperty() # size limit 1Mb (or 32Mb? not very clear from docs)
+    def get(self):
+        return self.object
     
-    # needed for queries like:
-    # ItemContainerAppengine.query( ancestor=some_collection.key, ItemContainerAppengine.item_tag=="VCARD" )
-    # (note that ancestor here need not be the direct parent, it can be the grand-parent etc.) 
-    item_tag = ndb.StringProperty()
-    
+    def debug_key_value(self):
+        return [('tag', self.object['tag']),
+                ('text', self.object['text'])]
+
+    # the object as returned by parse_objects()
+    object = ndb.JsonProperty() # size limit 1Mb 
+
 class CollectionContainerAppengine(ndb.Model):
     '''
     Container for a Collection.
@@ -141,8 +145,32 @@ class CollectionContainerAppengine(ndb.Model):
     todos = ndb.JsonProperty( default={} )
     journals = ndb.JsonProperty( default={} )
     timezones = ndb.JsonProperty( default={} )
+    
+    def get_events(self):
+        return self.events
+    
+    def get_cards(self):
+        return self.cards
+    
+    def get_todos(self):
+        return self.todos
+    
+    def get_journals(self):
+        return self.journals
+    
+    def get_timezones(self):
+        return self.timezones
+    
+    def debug_key_value(self):
+        return [ ('props', self.props),
+                 ('events', self.get_events()),
+                 ('cards', self.get_cards()),
+                 ('todos', self.get_todos()),
+                 ('journals', self.get_journals()),
+                 ('timezones', self.get_timezones()) ]
 
-    def tag_bin(self, tag):
+    def object_bin(self, object):
+        tag = object['tag']
         if tag=='VEVENT':
             return self.events
         elif tag=='VCARD':
@@ -168,6 +196,11 @@ class Collection(ical.Collection):
     Collection stored in datastore object. 
     
     This is the only class you want to use from this module.
+    
+    To add application-specific logic:
+    - set CollectionContainerClass to some subclass of CollectionContainerAppengine 
+    - set ItemContainerClass to some subclass of ItemContainerAppengine
+    - use hook_post_* (those functions get called after a transaction has succeeded for an item)
     """
     
     @ndb.transactional
@@ -183,7 +216,7 @@ class Collection(ical.Collection):
         
         # create the collection
         container_key = ndb.Key( pairs=key_pairs )
-        container = CollectionContainerAppengine(key=container_key, props=props)
+        container = CollectionContainerClass(key=container_key, props=props)
         container.put() # note: since we are in a transaction, this will be rolled back if the parent does not exist
         
         container_key_parent = container_key.parent()
@@ -197,7 +230,7 @@ class Collection(ical.Collection):
     def _get_key_pairs(self):
         if self.path:
             assert( self.path==self.path.strip('/') ) # no leading or trailing /
-            return [ ('CollectionContainerAppengine', name) for name in self.path.split('/') ]
+            return [ (CollectionContainerClass.__name__, name) for name in self.path.split('/') ]
         else:
             return []
 
@@ -213,11 +246,11 @@ class Collection(ical.Collection):
 
     def _get_item_container_key(self, name):
         assert( name )
-        return ndb.Key( pairs=(self._get_key_pairs() + [ ('ItemContainerAppengine', name) ]) )
+        return ndb.Key( pairs=(self._get_key_pairs() + [ (ItemContainerClass.__name__, name) ]) )
         
 #         #FIXME: if items can have no name:
 #         try:
-#             return ndb.Key( pairs=(self._get_key_pairs() + [ ('ItemContainerAppengine', name) ]) )
+#             return ndb.Key( pairs=(self._get_key_pairs() + [ (ItemContainerClass.__name__, name) ]) )
 #         except:
 #             unused_none, urlsafe = name # for those items that do not have a name, we use (None, key.urlsafe()) in the collection container bins
 #             return ndb.Key( urlsafe=urlsafe )
@@ -283,7 +316,7 @@ class Collection(ical.Collection):
         if key_pairs: 
             container_key = ndb.Key( pairs=key_pairs )
          
-            for item_container_key in ItemContainerAppengine.query(ancestor=container_key).iter(keys_only=True):
+            for item_container_key in ItemContainerClass.query(ancestor=container_key).iter(keys_only=True):
                 item_container_key.delete()
 
     @ndb.transactional
@@ -291,19 +324,27 @@ class Collection(ical.Collection):
         '''
         remove an existing item       
         '''
+
         item_container_key = self._get_item_container_key(name)
         item_container = item_container_key.get()
         if item_container: # if it actually exists...
+            
             item_container_key.delete()
 
             collection_container = self._get_container()
-            del collection_container.tag_bin( item_container.item_tag )[name]
+            del collection_container.object_bin( item_container.get() )[name]
             collection_container.put()
+            
+            # if this raises an exception then the operation will fail
+            hook_pre_remove(collection_container, item_container)
+            # this will get called if this transaction succeeds
+            ndb.get_context().call_on_commit( lambda: hook_post_remove(collection_container, item_container) )
 
     # we will make no distinction between append and replace
     # everythign needs to happen in the same transaction
-    # and both cases might happen at the same time anyway 
+    # and both cases might happen at the same time 
     # (ex: new timezone for existing event)
+    # so we must handle themin the same function
     def append(self, name, text_raw):
         self.replace(name, text_raw)
 
@@ -312,21 +353,34 @@ class Collection(ical.Collection):
         
         collection_container = self._get_container()
 
-        for tag, text in tag_text_iterator( text_raw ):
+        for object in ItemContainerClass.parse_objects( text_raw ):
             
-            if tag=="VTIMEZONE":
+            if object['tag']=="VTIMEZONE":
                 # timezones get their name from TZID in the request, not from the path specified in the url
                 # see ical._parse() and ical.Item.__init__()
-                item = ical.Item(text=text, name=None)
+                item = ical.Item(text=object['text'], name=None)
             else:
-                item = ical.Item(text=text, name=name)
-            
+                item = ical.Item(text=object['text'], name=name)
+                
+            # Radicale might have added custom fields
+            object['text'] = item.text
+        
             if item.name:
                 item_container_key = self._get_item_container_key(item.name)
                 item_container = item_container_key.get()
                 if not item_container: # the item does not exist, we are appending, we must create it
-                    item_container = ItemContainerAppengine(key=item_container_key)
-                item_container.set_item(item, tag) 
+                    item_container = ItemContainerClass(key=item_container_key)
+                    # if this raises an exception then the operation will fail
+                    object = hook_pre_append(collection_container, item_container, object)
+                    # this will get called if this transaction succeeds
+                    ndb.get_context().call_on_commit( lambda: hook_post_append(collection_container, item_container) )
+                else:
+                    # if this raises an exception then the operation will fail
+                    object = hook_pre_replace(collection_container, item_container, object)
+                    # this will get called if this transaction succeeds
+                    ndb.get_context().call_on_commit( lambda: hook_post_replace(collection_container, item_container) )
+                    
+                item_container.set(object) 
                 item_container.put()
                 
             else:
@@ -341,12 +395,13 @@ class Collection(ical.Collection):
 #                 # and use (None, item_container.key.urlsafe()) as an internal key
 #                 # in the collection container bins
 #                 
-#                 item_container = ItemContainerAppengine(parent=collection_container.key)
+#                 item_container = ItemContainerClass(parent=collection_container.key)
 #                 item_container.set_item(item, tag) 
 #                 item_container.put()        
 #                 name = ( None, item_container.key.urlsafe() )
+#                 ndb.get_context().call_on_commit( lambda: hook_post_append(collection_container, item_container) )
     
-            collection_container.tag_bin(tag)[item.name] = item.etag
+            collection_container.object_bin(object)[item.name] = item.etag
         
         collection_container.put()
 
@@ -410,11 +465,11 @@ class Collection(ical.Collection):
         if not container:
             return {}
         else:
-            return dict( container.events.items()
-                         + container.cards.items()
-                         + container.todos.items()
-                         + container.journals.items()
-                         + container.timezones.items() )
+            return dict( container.get_events().items()
+                         + container.get_cards().items()
+                         + container.get_todos().items()
+                         + container.get_journals().items()
+                         + container.get_timezones().items() )
 
     @property
     def etag(self):
@@ -441,7 +496,7 @@ class Collection(ical.Collection):
         logging.critical('#### NOSCALE: Collection.items()')
         container = self._get_container()
         if not container: return []
-        else: return [ self.get_item(name) for name in (container.events.keys() + container.todos.keys() + container.journals.keys() + container.cards.keys() + container.timezones.keys())]
+        else: return [ self.get_item(name) for name in (container.get_events().keys() + container.get_todos().keys() + container.get_journals().keys() + container.get_cards().keys() + container.get_timezones().keys())]
  
     @property
     def components(self):
@@ -449,7 +504,7 @@ class Collection(ical.Collection):
         logging.critical('#### NOSCALE: Collection.components()')
         container = self._get_container()
         if not container: return []
-        else: return [ self.get_item(name) for name in (container.events.keys() + container.todos.keys() + container.journals.keys() + container.cards.keys())]
+        else: return [ self.get_item(name) for name in (container.get_events().keys() + container.get_todos().keys() + container.get_journals().keys() + container.get_cards().keys())]
  
     @property
     def events(self):
@@ -457,7 +512,7 @@ class Collection(ical.Collection):
         logging.critical('#### NOSCALE: Collection.events()')
         container = self._get_container()
         if not container: return []
-        else: return [ self.get_item(name) for name in container.events.keys() ]
+        else: return [ self.get_item(name) for name in container.get_events().keys() ]
  
     @property
     def todos(self):
@@ -465,7 +520,7 @@ class Collection(ical.Collection):
         logging.critical('#### NOSCALE: Collection.todos()')
         container = self._get_container()
         if not container: return []
-        else: return [ self.get_item(name) for name in container.todos.keys() ]
+        else: return [ self.get_item(name) for name in container.get_todos().keys() ]
  
     @property
     def journals(self):
@@ -473,7 +528,7 @@ class Collection(ical.Collection):
         logging.critical('#### NOSCALE: Collection.journals()')
         container = self._get_container()
         if not container: return []
-        else: return [ self.get_item(name) for name in container.journals.keys() ]
+        else: return [ self.get_item(name) for name in container.get_journals().keys() ]
  
     @property
     def timezones(self):
@@ -481,14 +536,14 @@ class Collection(ical.Collection):
         logging.critical('#### NOSCALE: Collection.timezones()')
         container = self._get_container()
         if not container: return []
-        else: return [ self.get_item(name) for name in container.timezones.keys() ]
+        else: return [ self.get_item(name) for name in container.get_timezones().keys() ]
  
     @property
     def cards(self):
         """Get list of ``Card`` items in address book."""
         container = self._get_container()
         if not container: return []
-        else: return [ self.get_item(name) for name in container.cards.keys() ]
+        else: return [ self.get_item(name) for name in container.get_cards().keys() ]
 
     def write(self, headers=None, items=None):
         # nocscale
@@ -505,9 +560,51 @@ class Collection(ical.Collection):
 #         
 #         out = []
 #         
-#         for item_container_key in ItemContainerAppengine.query(ancestor=container.key).iter(keys_only=True):   
+#         for item_container_key in ItemContainerClass.query(ancestor=container.key).iter(keys_only=True):   
 #             out.append( item_container_key.get().get_item().text )
 #                 
 #         return '\n'.join( out )
 
+
+#########################
+# use this for application specific logic
+#########################
+
+CollectionContainerClass = CollectionContainerAppengine
+ItemContainerClass = ItemContainerAppengine
+
+#
+# hook_pre_*:
+# - modify the object (eg, parse for custom field)
+# - raise an exception to cause the operation to fail (eg, it is forbidden)
+#
+# hook_post_*: 
+# - do some bookkeeping (not protected by the transaction)
+# - if an exception is raised it will bubble up but the operation has already succeeded and has been commited 
+#
+
+def hook_pre_remove(collection_container, item_container):
+    #logging.info('hook_pre_remove, collection=%s, name=%s' % (str(collection_container.key.pairs()), item_container.key.string_id()))
+    pass
+
+def hook_pre_replace(collection_container, item_container, new_object):
+    #logging.info('hook_pre_replace, collection=%s, name=%s' % (str(collection_container.key.pairs()), item_container.key.string_id()))
+    return new_object # give application logic an opportunity to modify the object  
+
+def hook_pre_append(collection_container, item_container, new_object):
+    #logging.info('hook_pre_append, collection=%s, name=%s' % (str(collection_container.key.pairs()), item_container.key.string_id()))
+    return new_object # give application logic an opportunity to modify the object
+    
+def hook_post_remove(collection_container, item_container):
+    # at this point, item_container is no longer in the datastore (item_container.key.get() would return None)
+    #logging.info('hook_post_remove, collection=%s, name=%s' % (str(collection_container.key.pairs()), item_container.key.string_id()))
+    pass
+
+def hook_post_replace(collection_container, item_container):
+    #logging.info('hook_post_replace, collection=%s, name=%s' % (str(collection_container.key.pairs()), item_container.key.string_id()))
+    pass
+
+def hook_post_append(collection_container, item_container):
+    #logging.info('hook_post_append, collection=%s, name=%s' % (str(collection_container.key.pairs()), item_container.key.string_id()))
+    pass
 

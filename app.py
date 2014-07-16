@@ -48,17 +48,18 @@ class MainHandler(webapp2.RequestHandler):
                 
                 out = []
                 
-                for collection_container in radicale.storage.appengine.CollectionContainerAppengine.query():                    
-                    out.append( '* COLLECTION: key=%s:\nprops=%s' % (', '.join([str(pair) for pair in collection_container.key.pairs()]), collection_container.props) )
-                    out.append( 'events='+str(collection_container.events.keys()) )
-                    out.append( 'cards='+str(collection_container.cards.keys()) )
-                    out.append( 'todos='+str(collection_container.todos.keys()) )
-                    out.append( 'journals='+str(collection_container.journals.keys()) )
-                    out.append( 'timezones='+str(collection_container.timezones.keys()) )
+                for collection_container in radicale.storage.appengine.CollectionContainerClass.query():                    
+                    out.append( '* COLLECTION: key=%s' % (', '.join([str(pair) for pair in collection_container.key.pairs()])) )
+                    for bin, content in collection_container.debug_key_value():
+                        out.append( '%s=%s' %(bin, str(content) ) )
                     out.append( '\n\n' )
  
-                for item_container in radicale.storage.appengine.ItemContainerAppengine.query():                    
-                    out.append( '* item: key=%s\ntag=%s\ntext:\n%s' % (', '.join([str(pair) for pair in item_container.key.pairs()]), item_container.item_tag, item_container.item_text) )
+                for item_container in radicale.storage.appengine.ItemContainerClass.query():                    
+                    
+                    out.append( '* item: key=%s' % (', '.join([str(pair) for pair in item_container.key.pairs()]) ) )
+                    for key, value in item_container.debug_key_value():
+                        out.append( '%s=%s' %(key, str(value) ) )
+            
                     out.append( '\n\n' )
                 
                 return self.response.write('\n'.join(out))
