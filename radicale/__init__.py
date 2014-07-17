@@ -193,7 +193,7 @@ class Application(object):
         read_last_collection_allowed = None
         write_last_collection_allowed = None
 
-        for item in ical.Collection.from_path_iterator(path, depth, depth):
+        for item in ical.Collection.from_path_iterator(path, depth, include_container=True):
             permission = {}
             if isinstance(item, ical.Collection):
                 if rights.authorized(user, item, "r"):
@@ -291,18 +291,15 @@ class Application(object):
             user, password = self.decode(base64.b64decode(
                 authorization.encode("ascii")), environ).split(":", 1)
 
-#             #
-#             # set path from user
-#             #
-            if not environ["PATH_INFO"] or not environ["PATH_INFO"].strip('/'):
-                environ["PATH_INFO"] = '/%s/' % user
-                logging.critical('forced path to:'+environ["PATH_INFO"])
-    
         else:
             user = environ.get("REMOTE_USER")
             password = None
 
         is_authenticated = auth.is_authenticated(user, password)
+        if type(is_authenticated)==type((True,'user_redirect')): # authentication process redirects us to another username
+            is_authenticated, user_redirect = is_authenticated
+            user = user_redirect
+            
         is_valid_user = is_authenticated or not user
 
         path = environ["PATH_INFO"]
