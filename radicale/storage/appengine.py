@@ -97,10 +97,9 @@ class ItemContainerAppengine(ndb.Model):
 
   
     def get_item(self):
-        #FIXME: is it ok to always encode in utf-8 ?
         item_name = self.key.string_id()
         ItemSubClass = tag_class[ self.object['tag'] ] #FIXME: should we default to ical.Item?
-        return ItemSubClass(self.object['text'].decode('utf-8'), item_name)
+        return ItemSubClass(self.object['text'], item_name)
     
     def set(self, object):
         '''
@@ -353,9 +352,9 @@ class Collection(ical.Collection):
             if object['tag']=="VTIMEZONE":
                 # timezones get their name from TZID in the request, not from the path specified in the url
                 # see ical._parse() and ical.Item.__init__()
-                item = ical.Item(text=object['text'].decode('utf-8'), name=None)
+                item = ical.Item(text=object['text'], name=None)
             else:
-                item = ical.Item(text=object['text'].decode('utf-8'), name=name)
+                item = ical.Item(text=object['text'], name=name)
                 
             # Radicale might have added custom fields
             object['text'] = item.text
