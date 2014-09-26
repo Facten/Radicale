@@ -75,9 +75,9 @@ class ItemContainerAppengine(ndb.Model):
         - in subclasses: possibly more application specific keys we got from text
         '''
                 
-        #FIXME: do we need to decode text_raw?
+        # text_raw must be decoded 
         
-        lines = ical.unfold( text_raw )
+        lines = ical.unfold( text_raw.decode('utf-8') )
         text = []
         tag = None
         for line in lines:
@@ -99,6 +99,7 @@ class ItemContainerAppengine(ndb.Model):
     def get_item(self):
         item_name = self.key.string_id()
         ItemSubClass = tag_class[ self.object['tag'] ] #FIXME: should we default to ical.Item?
+        
         return ItemSubClass(self.object['text'], item_name)
     
     def set(self, object):
