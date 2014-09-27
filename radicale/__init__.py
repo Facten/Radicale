@@ -30,6 +30,10 @@ should have been included in this package.
 """
 
 import os
+
+def is_AppEngine():
+    return os.environ['SERVER_SOFTWARE'].startswith('Development/') or os.environ['SERVER_SOFTWARE'].startswith('Google App Engine/')
+
 import sys
 import pprint
 import base64
@@ -38,7 +42,9 @@ import socket
 try:
     import ssl
 except:
-    logging.critical('Error importing ssl (ok if Google AppEngine)')
+    if not is_AppEngine():
+        raise
+    
 import wsgiref.simple_server
 # Manage Python2/3 different modules
 # pylint: disable=F0401,E0611
@@ -303,7 +309,6 @@ class Application(object):
         is_valid_user = is_authenticated or not user
 
         path = environ["PATH_INFO"]
-        logging.critical('path='+str(path))
 
 # #noscale
 #         if is_valid_user:

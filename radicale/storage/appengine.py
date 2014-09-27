@@ -74,10 +74,21 @@ class ItemContainerAppengine(ndb.Model):
         - text
         - in subclasses: possibly more application specific keys we got from text
         '''
-                
-        # text_raw must be decoded 
         
-        lines = ical.unfold( text_raw.decode('utf-8') )
+        if isinstance(text_raw, str): # text_raw is bytestring, attempt to decode to unicode
+            try:
+                lines = ical.unfold( text_raw.decode('utf-8') )
+            except:
+                logging.warning('Error decoding [text_raw]='+str([text_raw]))
+                text_raw_decoded_error = unicode(text_raw, errors='replace')
+                logging.warning('Decoding to [text_raw_decoded_error]='+str([text_raw_decoded_error]))
+                lines = ical.unfold( text_raw_decoded_error )
+        elif isinstance(text_raw, unicode):
+            # text_raw is already unicode, probably the decoding was performed upstream by xml parsing the WebDAV request?
+            lines = ical.unfold( text_raw )
+        else:
+            raise Exception('text_raw is not a string, [text_raw]='+str([text_raw]))
+            
         text = []
         tag = None
         for line in lines:
@@ -475,7 +486,7 @@ class Collection(ical.Collection):
     @property
     def items(self):
         """Get list of all items in collection."""
-        logging.critical('#### NOSCALE: Collection.items()')
+        logging.warning('#### NOSCALE: Collection.items()')
         container = self._get_container()
         if not container: return []
         else: return [ self.get_item(name) for name in (container.get_events().keys() + container.get_todos().keys() + container.get_journals().keys() + container.get_cards().keys() + container.get_timezones().keys())]
@@ -483,7 +494,7 @@ class Collection(ical.Collection):
     @property
     def components(self):
         """Get list of all components in collection."""
-        logging.critical('#### NOSCALE: Collection.components()')
+        logging.warning('#### NOSCALE: Collection.components()')
         container = self._get_container()
         if not container: return []
         else: return [ self.get_item(name) for name in (container.get_events().keys() + container.get_todos().keys() + container.get_journals().keys() + container.get_cards().keys())]
@@ -491,7 +502,7 @@ class Collection(ical.Collection):
     @property
     def events(self):
         """Get list of ``Event`` items in calendar."""
-        logging.critical('#### NOSCALE: Collection.events()')
+        logging.warning('#### NOSCALE: Collection.events()')
         container = self._get_container()
         if not container: return []
         else: return [ self.get_item(name) for name in container.get_events().keys() ]
@@ -499,7 +510,7 @@ class Collection(ical.Collection):
     @property
     def todos(self):
         """Get list of ``Todo`` items in calendar."""
-        logging.critical('#### NOSCALE: Collection.todos()')
+        logging.warning('#### NOSCALE: Collection.todos()')
         container = self._get_container()
         if not container: return []
         else: return [ self.get_item(name) for name in container.get_todos().keys() ]
@@ -507,7 +518,7 @@ class Collection(ical.Collection):
     @property
     def journals(self):
         """Get list of ``Journal`` items in calendar."""
-        logging.critical('#### NOSCALE: Collection.journals()')
+        logging.warning('#### NOSCALE: Collection.journals()')
         container = self._get_container()
         if not container: return []
         else: return [ self.get_item(name) for name in container.get_journals().keys() ]
@@ -515,7 +526,7 @@ class Collection(ical.Collection):
     @property
     def timezones(self):
         """Get list of ``Timezone`` items in calendar."""
-        logging.critical('#### NOSCALE: Collection.timezones()')
+        logging.warning('#### NOSCALE: Collection.timezones()')
         container = self._get_container()
         if not container: return []
         else: return [ self.get_item(name) for name in container.get_timezones().keys() ]

@@ -106,7 +106,9 @@ try:
     if "RADICALE_CONFIG" in os.environ:
         _CONFIG_PARSER.read(os.environ["RADICALE_CONFIG"])
 except:
-    logging.critical('Error accessing config files (ok if Google AppEngine)')
+    from . import is_AppEngine
+    if not is_AppEngine():
+        raise
 
 # Wrap config module into ConfigParser instance
 sys.modules[__name__] = _CONFIG_PARSER
