@@ -192,7 +192,7 @@ class CollectionContainerAppengine(ndb.Model):
         elif tag=='VTIMEZONE':
             return self.timezones
         else:
-            logging.critical('tag_bin: unknown tag='+str(tag))
+            logging.error('tag_bin: unknown tag='+str(tag))
             raise NotImplementedError #FIXME: can this happen?
     
     # collection properties, ex: {"tag": "VADDRESSBOOK"}
@@ -221,6 +221,9 @@ class Collection(ical.Collection):
         (think: "mkdir")
         '''
         assert( self.path ) # make sure the path is not None
+        
+        if self.exists: # this makes 'create' idempotent
+            return
         
         key_pairs = self._get_key_pairs()
         
